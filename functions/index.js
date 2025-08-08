@@ -13,9 +13,69 @@ function isEmail(v) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v || "");
 }
 
+// Ajoute les en-têtes CORS pour toutes les réponses HTTP
+function applyCors(res) {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Headers", "Content-Type, X-App-Token");
+  res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+}
+
+// 🔹 Fonction pour traiter les messages du formulaire de contact
+exports.sendMail = functions.https.onRequest(async (req, res) => {
+  applyCors(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
+  try {
+    if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+
+    const { name, email, phone, message, token } = req.body || {};
+    if (!name || !isEmail(email) || !message || !token) {
+      return res.status(400).json({ error: "Champs manquants ou invalides" });
+    }
+
+    const secret = functions.config().recaptcha.secret;
+    const verifyUrl = `https://www.google.com/recaptcha/api/siteverify?secret=${secret}&response=${token}`;
+    const captcha = await fetch(verifyUrl, { method: "POST" }).then(r => r.json());
+    if (!captcha.success) {
+      return res.status(400).json({ error: "reCAPTCHA invalide" });
+    }
+
+    const fromEmail = process.env.MAIL_FROM;
+    const adminEmail = process.env.MAIL_ADMIN;
+
+    const htmlClient = `
+      <p>Bonjour ${name},</p>
+      <p>Merci pour votre message. Nous vous répondrons dans les plus brefs délais.</p>
+      <p>Bien cordialement,<br/>KD Expertise</p>
+    `;
+
+    const htmlAdmin = `
+      <p>Nouveau message de contact :</p>
+      <ul>
+        <li>Nom : ${name}</li>
+        <li>Email : ${email}</li>
+        ${phone ? `<li>Téléphone : ${phone}</li>` : ""}
+        <li>Message : ${message}</li>
+      </ul>
+    `;
+
+    await sgMail.send([
+      { to: adminEmail, from: fromEmail, subject: `Nouveau message — ${name}`, html: htmlAdmin },
+      { to: email, from: fromEmail, subject: `Votre message a bien été reçu`, html: htmlClient }
+    ]);
+
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error("Erreur sendMail:", e);
+    return res.status(500).json({ error: "Erreur serveur" });
+  }
+});
+
 // 🔹 Fonction pour récupérer les disponibilités
 exports.getAvailabilities = functions.https.onRequest(async (req, res) => {
+  applyCors(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
   try {
+    if (req.method !== "GET") return res.status(405).send("Method Not Allowed");
     const { date } = req.query;
     if (!date) return res.status(400).json({ error: "Date requise" });
 
@@ -38,6 +98,8 @@ exports.getAvailabilities = functions.https.onRequest(async (req, res) => {
 
 // 🔹 Fonction pour créer un rendez-vous et envoyer les e-mails
 exports.createAppointment = functions.https.onRequest(async (req, res) => {
+  applyCors(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
   try {
     if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
 
